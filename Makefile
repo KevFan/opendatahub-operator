@@ -993,8 +993,8 @@ install-cert-manager: helm ## Install cert-manager operator (fetched from odh-gi
 	trap "rm -rf $$tmpdir" EXIT; \
 	go run -C ./cmd/manifest-tools main.go download \
 		--config "$(CURDIR)/hack/cert-manager-config.yaml" \
-		--charts-dir $$tmpdir; \
-	"$(HELM)" upgrade --install cert-manager-operator $$tmpdir/cert-manager-operator --create-namespace --take-ownership; \
+		--charts-dir "$$tmpdir"; \
+	"$(HELM)" upgrade --install cert-manager-operator "$$tmpdir/cert-manager-operator" --create-namespace --take-ownership; \
 	kubectl rollout status deployment/cert-manager-operator-controller-manager -n cert-manager-operator --timeout=120s; \
 	for dep in cert-manager cert-manager-webhook cert-manager-cainjector; do \
 		echo "Waiting for deployment/$$dep in cert-manager namespace..."; \

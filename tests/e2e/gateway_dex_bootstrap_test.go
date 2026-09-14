@@ -26,12 +26,15 @@ import (
 )
 
 const (
-	xksDexNamespace  = "dex-system"
-	xksDexName       = "dex"
-	xksDexPort       = 5556
-	xksDexImage      = "ghcr.io/dexidp/dex:v2.41.1"
-	xksDexTLSName    = "dex-tls"
-	xksDexConfigName = "dex-config"
+	xksDexNamespace      = "dex-system"
+	xksDexName           = "dex"
+	xksDexPort           = 5556
+	// Digest verified from https://ghcr.io/v2/dexidp/dex/manifests/v2.41.1.
+	xksDexImage          = "ghcr.io/dexidp/dex@sha256:bc7cfce7c17f52864e2bb2a4dc1d2f86a41e3019f6d42e81d92a301fad0c8a1d"
+	xksDexTLSName        = "dex-tls"
+	xksDexConfigName     = "dex-config"
+	xksDexOwnershipLabel = "opendatahub.io/e2e-suite"
+	xksDexOwnershipValue = "gateway-xks"
 	// In-cluster issuer URL reachable from kube-auth-proxy pods (Dex serves OIDC discovery here).
 	xksGatewayOIDCIssuerURL = "https://dex.dex-system.svc.cluster.local:5556/dex"
 )
@@ -78,6 +81,7 @@ func newXKSDexConfigMap() *corev1.ConfigMap {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      xksDexConfigName,
 			Namespace: xksDexNamespace,
+			Labels:    xksDexOwnershipLabels(),
 		},
 		Data: map[string]string{
 			"config.yaml": xksDexConfigYAML(),
@@ -100,6 +104,11 @@ func (tc *TestContext) ensureDexForXKS(t *testing.T) {
 		Namespace: xksDexNamespace,
 	}, dexDeploy)
 	if err == nil {
+		if !hasXKSDexOwnership(dexDeploy) {
+			t.Logf("Dex deployment already exists in %s but is not owned by this suite; skipping mutation", xksDexNamespace)
+			tc.waitForDexDeploymentReady(t)
+			return
+		}
 		t.Logf("Dex deployment already exists in %s, ensuring config is current", xksDexNamespace)
 		tc.ensureXKSDexConfigMap(t)
 		tc.restartXKSDexDeployment(t)
@@ -141,7 +150,8 @@ func (tc *TestContext) ensureDexForXKS(t *testing.T) {
 			Name:      xksDexName,
 			Namespace: xksDexNamespace,
 			Labels: map[string]string{
-				"app": xksDexName,
+				"app":                    xksDexName,
+				xksDexOwnershipLabel: xksDexOwnershipValue,
 			},
 		},
 		Spec: appsv1.DeploymentSpec{
@@ -236,6 +246,19 @@ func (tc *TestContext) ensureDexForXKS(t *testing.T) {
 func (tc *TestContext) ensureXKSDexConfigMap(t *testing.T) {
 	t.Helper()
 
+	configMap := &corev1.ConfigMap{}
+	err := tc.Client().Get(tc.Context(), types.NamespacedName{
+		Name:      xksDexConfigName,
+		Namespace: xksDexNamespace,
+	}, configMap)
+	if err == nil && !hasXKSDexOwnership(configMap) {
+		t.Logf("Dex ConfigMap %s/%s is not owned by this suite; skipping mutation", xksDexNamespace, xksDexConfigName)
+		return
+	}
+	if err != nil && !k8serr.IsNotFound(err) {
+		t.Fatalf("failed to check existing Dex ConfigMap: %v", err)
+	}
+
 	tc.EventuallyResourceCreatedOrUpdated(
 		WithObjectToCreate(newXKSDexConfigMap()),
 		WithEventuallyTimeout(tc.TestTimeouts.crCreationTimeout),
@@ -250,6 +273,19 @@ func (tc *TestContext) restartXKSDexDeployment(t *testing.T) {
 	if err := tc.Client().Get(tc.Context(), nn, deployment); err != nil {
 		t.Fatalf("failed to get Dex deployment for restart: %v", err)
 	}
+	if !hasXKSDexOwnership(deployment) {
+		t.Logf("Dex deployment %s/%s is not owned by this suite; skipping restart", xksDexNamespace, xksDexName)
+		return
+	}
+
+	configMap := &corev1.ConfigMap{}
+	if err := tc.Client().Get(tc.Context(), types.NamespacedName{Name: xksDexConfigName, Namespace: xksDexNamespace}, configMap); err != nil {
+		t.Fatalf("failed to get Dex ConfigMap before restart: %v", err)
+	}
+	if !hasXKSDexOwnership(configMap) {
+		t.Logf("Dex ConfigMap %s/%s is not owned by this suite; skipping restart", xksDexNamespace, xksDexConfigName)
+		return
+	}
 
 	if deployment.Spec.Template.Annotations == nil {
 		deployment.Spec.Template.Annotations = map[string]string{}
@@ -259,6 +295,14 @@ func (tc *TestContext) restartXKSDexDeployment(t *testing.T) {
 	if err := tc.Client().Update(tc.Context(), deployment); err != nil {
 		t.Fatalf("failed to restart Dex deployment: %v", err)
 	}
+}
+
+func xksDexOwnershipLabels() map[string]string {
+	return map[string]string{xksDexOwnershipLabel: xksDexOwnershipValue}
+}
+
+func hasXKSDexOwnership(obj metav1.Object) bool {
+	return obj.GetLabels()[xksDexOwnershipLabel] == xksDexOwnershipValue
 }
 
 func (tc *TestContext) waitForDexDeploymentReady(t *testing.T) {

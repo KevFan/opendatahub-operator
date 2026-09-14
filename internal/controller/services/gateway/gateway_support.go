@@ -175,6 +175,7 @@ func GetFQDN(ctx context.Context, cli client.Client, gatewayConfig *serviceApi.G
 
 		baseDomain := strings.TrimSpace(gatewayConfig.Spec.Domain)
 		if baseDomain != "" {
+			baseDomain = strings.TrimPrefix(baseDomain, "*.")
 			return fmt.Sprintf("%s.%s", subdomain, baseDomain), nil
 		}
 	}
