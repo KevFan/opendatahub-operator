@@ -32,6 +32,7 @@ func (tc *TestContext) EnsureGatewayConfigForXKS(t *testing.T) {
 	t.Helper()
 
 	tc.ensureDexForXKS(t)
+	tc.ensureXKSGatewayOIDCPrerequisites(t)
 
 	gatewayConfig := &serviceApi.GatewayConfig{}
 	err := tc.Client().Get(tc.Context(), types.NamespacedName{Name: serviceApi.GatewayConfigName}, gatewayConfig)
@@ -47,10 +48,22 @@ func (tc *TestContext) EnsureGatewayConfigForXKS(t *testing.T) {
 		t.Fatalf("failed to check for existing GatewayConfig: %v", err)
 	}
 
-	gatewayNS := gateway.GetGatewayNamespace()
 	t.Logf("Bootstrapping GatewayConfig for xKS (namespace=%s, domain=%s, issuer=%s)",
-		gatewayNS, xksGatewayDomain, xksGatewayOIDCIssuerURL)
+		gateway.GetGatewayNamespace(), xksGatewayDomain, xksGatewayOIDCIssuerURL)
+	defaultGateway := newXKSGatewayConfig()
+	tc.EventuallyResourceCreatedOrUpdated(
+		WithObjectToCreate(defaultGateway),
+		WithEventuallyTimeout(tc.TestTimeouts.crCreationTimeout),
+	)
 
+	tc.waitForXKSGatewayConfigReady(t)
+	t.Log("GatewayConfig bootstrap completed")
+}
+
+func (tc *TestContext) ensureXKSGatewayOIDCPrerequisites(t *testing.T) {
+	t.Helper()
+
+	gatewayNS := gateway.GetGatewayNamespace()
 	tc.EventuallyResourceCreatedOrUpdated(
 		WithObjectToCreate(CreateNamespaceWithLabels(gatewayNS, nil)),
 		WithEventuallyTimeout(tc.TestTimeouts.crCreationTimeout),
@@ -70,15 +83,6 @@ func (tc *TestContext) EnsureGatewayConfigForXKS(t *testing.T) {
 		WithObjectToCreate(oidcSecret),
 		WithEventuallyTimeout(tc.TestTimeouts.crCreationTimeout),
 	)
-
-	defaultGateway := newXKSGatewayConfig()
-	tc.EventuallyResourceCreatedOrUpdated(
-		WithObjectToCreate(defaultGateway),
-		WithEventuallyTimeout(tc.TestTimeouts.crCreationTimeout),
-	)
-
-	tc.waitForXKSGatewayConfigReady(t)
-	t.Log("GatewayConfig bootstrap completed")
 }
 
 func newXKSGatewayConfig() *serviceApi.GatewayConfig {

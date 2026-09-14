@@ -443,6 +443,20 @@ func TestGetFQDN(t *testing.T) {
 			description:    "should use custom subdomain with user-provided domain",
 		},
 		{
+			name: "leading wildcard is removed from user-provided domain",
+			gatewayConfig: &serviceApi.GatewayConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: serviceApi.GatewayConfigName,
+				},
+				Spec: serviceApi.GatewayConfigSpec{
+					Domain: "*." + testDomain,
+				},
+			},
+			expectedDomain: DefaultGatewaySubdomain + "." + testDomain,
+			expectError:    false,
+			description:    "should remove a leading wildcard before composing the hostname",
+		},
+		{
 			name: "whitespace subdomain falls back to default",
 			gatewayConfig: &serviceApi.GatewayConfig{
 				ObjectMeta: metav1.ObjectMeta{

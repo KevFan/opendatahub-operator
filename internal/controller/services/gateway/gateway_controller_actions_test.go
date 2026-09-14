@@ -34,6 +34,7 @@ func TestXKSReconcileWithoutDomainStopsCleanly(t *testing.T) {
 		Spec: serviceApi.GatewayConfigSpec{
 			IngressMode: serviceApi.IngressModeLoadBalancer,
 		},
+		Status: serviceApi.GatewayConfigStatus{Domain: "rh-ai.previous.example.com"},
 	}
 
 	cli, err := fakeclient.New(fakeclient.WithObjects(gatewayConfig))
@@ -51,6 +52,7 @@ func TestXKSReconcileWithoutDomainStopsCleanly(t *testing.T) {
 	g.Expect(createEnvoyFilter(ctx, rr)).To(Succeed())
 	g.Expect(createNetworkPolicy(ctx, rr)).To(Succeed())
 	g.Expect(syncGatewayConfigStatus(ctx, rr)).To(Succeed())
+	g.Expect(gatewayConfig.Status.Domain).To(BeEmpty(), "stale status domain should be cleared when spec.domain is removed")
 
 	ready := rr.Conditions.GetCondition(ReadyConditionType)
 	g.Expect(ready).NotTo(BeNil())

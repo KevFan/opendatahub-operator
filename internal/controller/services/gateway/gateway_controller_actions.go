@@ -500,6 +500,14 @@ func syncGatewayConfigStatus(ctx context.Context, rr *odhtypes.ReconciliationReq
 		return nil
 	}
 
+	if _, err := resolveGatewayHostname(ctx, rr, gatewayConfig); err != nil {
+		if errors.Is(err, ErrDomainRequired) {
+			gatewayConfig.Status.Domain = ""
+			return nil
+		}
+		return fmt.Errorf("failed to resolve gateway domain: %w", err)
+	}
+
 	// Calculate and set domain in status (single source of truth for components).
 	// The reconciler framework persists status as part of normal reconciliation.
 	domain, err := GetGatewayDomain(ctx, rr.Client)
