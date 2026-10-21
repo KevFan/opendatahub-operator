@@ -6,15 +6,23 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch: # Allow manual triggering
 
+concurrency:
+  group: update-manifest-shas-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
-  update-manifest-shas:
+  plan:
     runs-on: ubuntu-latest
-    # Job only runs if the current branch reference is 'refs/heads/main'.
     if: github.ref == 'refs/heads/main'
+    outputs:
+      plan: ${{ steps.plan-shas.outputs.plan }}
+      matrix: ${{ steps.plan-shas.outputs.matrix }}
+      has_updates: ${{ steps.plan-shas.outputs.has_updates }}
+      failures: ${{ steps.plan-shas.outputs.failures }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
@@ -34,58 +42,135 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Update manifest SHAs
-        id: update-shas
+      - name: Plan manifest SHA updates
+        id: plan-shas
         env:
           GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
-        run: GITHUB_TOKEN=$GITHUB_TOKEN make update-refs-shas
+          CONFIG_FILE: ${{ github.workspace }}/manifests-config.yaml
+        run: go run -C ./cmd/manifest-tools main.go update-refs plan-shas --config "$CONFIG_FILE"
 
-      - name: Update cloud manager RBAC
-        if: steps.update-shas.outputs.updates-needed == 'true'
-        run: make update-cloudmanager-rbac
+  update-unit:
+    needs: plan
+    if: needs.plan.outputs.has_updates == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix || '{"include":[{"unit":"__no_updates__"}]}') }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
 
-      - name: Resolve image digests
-        if: steps.update-shas.outputs.updates-needed == 'true'
-        run: make resolve-image-digests
+      - name: Generate GitHub App Token
+        id: generate-token
+        uses: actions/create-github-app-token@7e473efe3cb98aa54f8d4bac15400b15fad77d94 # v2.2.0
+        with:
+          app-id: ${{ secrets.ODH_RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.ODH_RELEASE_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Apply planned refs
+        env:
+          CONFIG_FILE: ${{ github.workspace }}/manifests-config.yaml
+          PLAN_JSON: ${{ needs.plan.outputs.plan }}
+          UNIT_ID: ${{ matrix.unit }}
+        run: |
+          printf '%s' "$PLAN_JSON" > "$RUNNER_TEMP/manifest-sha-plan.json"
+          go run -C ./cmd/manifest-tools main.go update-refs apply-sha-plan \
+            --config "$CONFIG_FILE" \
+            --plan-file "$RUNNER_TEMP/manifest-sha-plan.json" \
+            --unit "$UNIT_ID"
+
+      - name: Prepare component manifests and related image digests
+        env:
+          UNIT_SECTION: ${{ matrix.section }}
+          UNIT_COMPONENT: ${{ matrix.component }}
+        run: |
+          case "$UNIT_SECTION" in
+            buildConfig)
+              make resolve-image-digests RESOLVE_CSV_ONLY=true
+              ;;
+            ccmCharts)
+              make update-cloudmanager-rbac
+              ;;
+            components|componentCharts)
+              make get-manifests MANIFEST_SECTION="$UNIT_SECTION" MANIFEST_COMPONENT="$UNIT_COMPONENT"
+              make resolve-image-digests RESOLVE_COMPONENT="$UNIT_COMPONENT"
+              ;;
+            *)
+              echo "Unknown manifest update section: $UNIT_SECTION" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Create Pull Request
-        if: steps.update-shas.outputs.updates-needed == 'true'
         uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
         id: create-pr
         with:
           token: ${{ steps.generate-token.outputs.token }}
-          commit-message: "chore: update manifest commit SHAs"
-          labels: "auto-bump-manifests-and-images${{ steps.update-shas.outputs.fetch-failed == 'true' && ',do-not-merge' || '' }}"
-          title: "chore: update manifest commit SHAs"
+          commit-message: "chore: update manifest SHAs for ${{ matrix.unit }}"
+          labels: "auto-bump-manifests-and-images"
+          title: "chore: update manifest SHAs for ${{ matrix.unit }}"
           body: |
-            This PR updates the manifest commit SHAs to the latest available commits.
-            ${{ steps.update-shas.outputs.fetch-failed == 'true' && format('
+            This PR updates manifest commit SHAs for `${{ matrix.unit }}`.
 
-            > [!WARNING]
-            > These components failed to fetch from GitHub and were **not** updated:
-            > `{0}`
-
-            The scheduled workflow run is marked as failed. Please investigate.', steps.update-shas.outputs.failed-components) || '' }}
-          branch: sync/upgrade-manifest-shas
+            The ODH and RHOAI refs are updated together when both are configured.
+          branch: sync/upgrade-manifest-shas/${{ matrix.slug }}
           delete-branch: true
 
-      - name: Fail if any SHA fetches failed
-        if: steps.update-shas.outputs.fetch-failed == 'true'
-        env:
-          FAILED_COMPONENTS: ${{ steps.update-shas.outputs.failed-components }}
-        run: |
-          printf '::error::Some component SHA fetches failed: %s\n' "$FAILED_COMPONENTS"
-          exit 1
-
       - name: Output Summary
-        if: steps.update-shas.outputs.updates-needed == 'true'
+        if: steps.create-pr.outputs.pull-request-operation != ''
+        env:
+          PR_OPERATION: ${{ steps.create-pr.outputs.pull-request-operation }}
+          PR_URL: ${{ steps.create-pr.outputs.pull-request-url }}
+          UNIT_ID: ${{ matrix.unit }}
         run: |
-          echo "✅ Updates processed successfully"
-          if [[ "${{ steps.create-pr.outputs.pull-request-operation }}" == "created" ]]; then
-            echo "📋 Pull request created: ${{ steps.create-pr.outputs.pull-request-url }}"
-            echo "📋 Pull request number: #${{ steps.create-pr.outputs.pull-request-number }}"
-          elif [[ "${{ steps.create-pr.outputs.pull-request-operation }}" == "updated" ]]; then
-            echo "📋 Pull request updated: ${{ steps.create-pr.outputs.pull-request-url }}"
-          else
-            echo "📋 No pull request changes needed"
+          echo "### $UNIT_ID" >> "$GITHUB_STEP_SUMMARY"
+          echo "Operation: $PR_OPERATION" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pull request: $PR_URL" >> "$GITHUB_STEP_SUMMARY"
+
+  summary:
+    needs: [plan, update-unit]
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report workflow results
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          UPDATE_RESULT: ${{ needs.update-unit.result }}
+          PLAN_FAILURES: ${{ needs.plan.outputs.failures }}
+        run: |
+          failed=false
+          echo "## Manifest SHA update summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "Plan job: $PLAN_RESULT" >> "$GITHUB_STEP_SUMMARY"
+          echo "PR jobs: $UPDATE_RESULT" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$PLAN_RESULT" != "success" ]]; then
+            echo "The SHA plan could not be created." >> "$GITHUB_STEP_SUMMARY"
+            failed=true
+          fi
+
+          if [[ -z "$PLAN_FAILURES" ]]; then
+            echo "The SHA plan did not provide failure details." >> "$GITHUB_STEP_SUMMARY"
+            failed=true
+          elif printf '%s' "$PLAN_FAILURES" | jq -e 'length > 0' >/dev/null; then
+            echo "### Upstream fetch failures" >> "$GITHUB_STEP_SUMMARY"
+            printf '%s' "$PLAN_FAILURES" | jq -r '.[] | "- \(.unit) / \(.platform) (`\(.repo)` at `\(.branch)`): \(.error)"' >> "$GITHUB_STEP_SUMMARY"
+            failed=true
+          fi
+
+          if [[ "$UPDATE_RESULT" != "success" && "$UPDATE_RESULT" != "skipped" ]]; then
+            echo "Update units did not complete successfully (result: $UPDATE_RESULT). Other unit PRs were allowed to continue." >> "$GITHUB_STEP_SUMMARY"
+            failed=true
+          fi
+
+          if $failed; then
+            exit 1
           fi

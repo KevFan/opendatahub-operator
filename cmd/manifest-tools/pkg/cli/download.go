@@ -14,6 +14,8 @@ func newDownloadCommand(root *rootOptions) *cobra.Command {
 	var chartsDir string
 	var useLocal bool
 	var componentOverrides []string
+	var section string
+	var onlyComponent string
 
 	cmd := &cobra.Command{
 		Use:   "download",
@@ -40,6 +42,8 @@ format, tag/branch refs, and local checkout fallback.`,
 			return downloader.Download(cmd.Context(), downloader.Options{
 				ConfigFile:   root.configFile,
 				Platform:     platform,
+				Section:      section,
+				Component:    onlyComponent,
 				ManifestsDir: manifestsDir,
 				ChartsDir:    chartsDir,
 				UseLocal:     ul,
@@ -52,6 +56,8 @@ format, tag/branch refs, and local checkout fallback.`,
 	cmd.Flags().StringVar(&chartsDir, "charts-dir", "opt/charts", "Destination directory for charts")
 	cmd.Flags().BoolVar(&useLocal, "use-local", false, "Copy from adjacent local checkout instead of cloning")
 	cmd.Flags().StringArrayVar(&componentOverrides, "component", nil, "Override a component source: key=org:repo:ref:sourcePath")
+	cmd.Flags().StringVar(&section, "section", "", "Download only one manifests-config section: components, ccmCharts, or componentCharts")
+	cmd.Flags().StringVar(&onlyComponent, "only-component", "", "Download only this key within the selected section")
 
 	cmd.Args = func(cmd *cobra.Command, args []string) error {
 		for _, a := range args {

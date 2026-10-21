@@ -31,6 +31,8 @@ const (
 type Options struct {
 	ConfigFile   string
 	Platform     string
+	Section      string
+	Component    string
 	ManifestsDir string
 	ChartsDir    string
 	UseLocal     bool
@@ -42,6 +44,12 @@ type componentEntry struct {
 	Repo config.PlatformRepo
 }
 
+type repositorySections struct {
+	components      map[string]config.Component
+	ccmCharts       map[string]config.Component
+	componentCharts map[string]config.Component
+}
+
 func Download(ctx context.Context, opts Options) error {
 	cfg, err := config.Load(opts.ConfigFile)
 	if err != nil {
@@ -50,7 +58,12 @@ func Download(ctx context.Context, opts Options) error {
 
 	platform := normalizePlatform(opts.Platform)
 
-	manifests, err := collectEntries(cfg.Components, platform)
+	sections, err := selectDownloadRepositories(cfg, opts.Section, opts.Component)
+	if err != nil {
+		return err
+	}
+
+	manifests, err := collectEntries(sections.components, platform)
 	if err != nil {
 		return err
 	}
@@ -59,7 +72,7 @@ func Download(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	charts, err := mergeCharts(cfg.CCMCharts, cfg.ComponentCharts, platform)
+	charts, err := mergeCharts(sections.ccmCharts, sections.componentCharts, platform)
 	if err != nil {
 		return err
 	}
@@ -91,6 +104,61 @@ func Download(ctx context.Context, opts Options) error {
 
 	fmt.Printf("%s✓ All downloads complete%s\n", colorGreen, colorReset)
 	return nil
+}
+
+func selectDownloadRepositories(cfg *config.ManifestsConfig, section, component string) (repositorySections, error) {
+	selected := repositorySections{
+		components:      cfg.Components,
+		ccmCharts:       cfg.CCMCharts,
+		componentCharts: cfg.ComponentCharts,
+	}
+
+	if section == "" {
+		if component != "" {
+			return repositorySections{}, fmt.Errorf("a manifest section is required when filtering by component")
+		}
+		return selected, nil
+	}
+
+	switch section {
+	case "components":
+		selected.ccmCharts = nil
+		selected.componentCharts = nil
+	case "ccmCharts":
+		selected.components = nil
+		selected.componentCharts = nil
+	case "componentCharts":
+		selected.components = nil
+		selected.ccmCharts = nil
+	default:
+		return repositorySections{}, fmt.Errorf("unknown manifest section %q", section)
+	}
+
+	if component == "" {
+		return selected, nil
+	}
+
+	var err error
+	switch section {
+	case "components":
+		selected.components, err = selectComponent(selected.components, component, section)
+	case "ccmCharts":
+		selected.ccmCharts, err = selectComponent(selected.ccmCharts, component, section)
+	case "componentCharts":
+		selected.componentCharts, err = selectComponent(selected.componentCharts, component, section)
+	}
+	if err != nil {
+		return repositorySections{}, err
+	}
+	return selected, nil
+}
+
+func selectComponent(components map[string]config.Component, name, section string) (map[string]config.Component, error) {
+	component, ok := components[name]
+	if !ok {
+		return nil, fmt.Errorf("%s.%s not found in manifests config", section, name)
+	}
+	return map[string]config.Component{name: component}, nil
 }
 
 func normalizePlatform(p string) string {

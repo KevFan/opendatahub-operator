@@ -344,7 +344,11 @@ kube-lint: prepare ## Run kube-linter against rendered manifests.
 
 .PHONY: get-manifests
 get-manifests: ## Fetch components manifests from remote git repo
-	go run -C ./cmd/manifest-tools main.go download --config $(CURDIR)/manifests-config.yaml --platform $(ODH_PLATFORM_TYPE) --manifests-dir $(CURDIR)/opt/manifests --charts-dir $(CURDIR)/opt/charts
+	go run -C ./cmd/manifest-tools main.go download --config $(CURDIR)/manifests-config.yaml --platform $(ODH_PLATFORM_TYPE) --manifests-dir $(CURDIR)/opt/manifests --charts-dir $(CURDIR)/opt/charts $(if $(MANIFEST_SECTION),--section "$(MANIFEST_SECTION)") $(if $(MANIFEST_COMPONENT),--only-component "$(MANIFEST_COMPONENT)")
+
+.PHONY: get-ccm-manifests
+get-ccm-manifests: ## Fetch only CCM charts for RBAC generation
+	go run -C ./cmd/manifest-tools main.go download --config $(CURDIR)/manifests-config.yaml --platform $(ODH_PLATFORM_TYPE) --manifests-dir $(CURDIR)/opt/manifests --charts-dir $(CURDIR)/opt/charts --section ccmCharts
 CLEANFILES += opt/manifests/* opt/charts/*
 
 .PHONY: update-rhai-images
@@ -371,7 +375,7 @@ validate-related-images: yq ## Validate RELATED_IMAGE_* names against build conf
 
 .PHONY: resolve-image-digests
 resolve-image-digests: ## Resolve image digests from Build-Config and update manifests-config.yaml
-	go run -C ./cmd/manifest-tools main.go resolve-digests --config $(CURDIR)/manifests-config.yaml --related-images-config $(CURDIR)/component-params-env.yaml --manifests-dir $(CURDIR)/opt/manifests
+	go run -C ./cmd/manifest-tools main.go resolve-digests --config $(CURDIR)/manifests-config.yaml --related-images-config $(CURDIR)/component-params-env.yaml --manifests-dir $(CURDIR)/opt/manifests $(if $(RESOLVE_COMPONENT),--component "$(RESOLVE_COMPONENT)") $(if $(filter true,$(RESOLVE_CSV_ONLY)),--csv-only)
 
 .PHONY: update-refs-shas
 update-refs-shas: ## Update branch@sha refs to latest commit SHAs from GitHub (requires GITHUB_TOKEN)
@@ -927,7 +931,7 @@ ccm-paths = {./api/cloudmanager/$(1)/...,./internal/controller/cloudmanager/$(1)
 ##@ CCM Code Generation
 
 .PHONY: update-cloudmanager-rbac
-update-cloudmanager-rbac: yq helm get-manifests ## Update kubebuilder RBAC annotations for cloud manager chart roles
+update-cloudmanager-rbac: yq helm get-ccm-manifests ## Update kubebuilder RBAC annotations for cloud manager chart roles
 	bash ./hack/update-cloudmanager-rbac.sh "$(YQ)" "$(HELM)"
 
 .PHONY: manifests-ccm

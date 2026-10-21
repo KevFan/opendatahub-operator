@@ -20,6 +20,8 @@ func newUpdateRefsCommand(root *rootOptions) *cobra.Command {
 
 	cmd.AddCommand(
 		newUpdateRefsSHAsCommand(root),
+		newPlanSHAsCommand(root),
+		newApplySHAPlanCommand(root),
 		newUpdateRefsTagsCommand(root),
 		newUpdateRefsRHOAIBranchCommand(root),
 	)

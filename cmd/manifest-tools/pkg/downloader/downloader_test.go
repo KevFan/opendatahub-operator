@@ -80,6 +80,35 @@ func TestCollectEntries_MissingPlatformSkipped(t *testing.T) {
 	}
 }
 
+func TestSelectDownloadRepositories_ComponentSectionSelectsOnlyRequestedComponent(t *testing.T) {
+	cfg := &config.ManifestsConfig{
+		Components: map[string]config.Component{
+			"ray":       {ODH: &config.PlatformRepo{Repo: "org/ray", Ref: "main@abc", SourcePath: "config"}},
+			"dashboard": {ODH: &config.PlatformRepo{Repo: "org/dashboard", Ref: "main@def", SourcePath: "config"}},
+		},
+		CCMCharts: map[string]config.Component{
+			"lws-operator": {ODH: &config.PlatformRepo{Repo: "org/charts", Ref: "main@ghi", SourcePath: "charts/lws"}},
+		},
+		ComponentCharts: map[string]config.Component{
+			"dashboard-operator": {ODH: &config.PlatformRepo{Repo: "org/dashboard", Ref: "main@jkl", SourcePath: "charts/dashboard"}},
+		},
+	}
+
+	selected, err := selectDownloadRepositories(cfg, "components", "ray")
+	if err != nil {
+		t.Fatalf("selectDownloadRepositories() error: %v", err)
+	}
+	if len(selected.components) != 1 {
+		t.Fatalf("selected %d components, want only ray", len(selected.components))
+	}
+	if _, ok := selected.components["ray"]; !ok {
+		t.Fatalf("selected components do not include ray: %v", selected.components)
+	}
+	if len(selected.ccmCharts) != 0 || len(selected.componentCharts) != 0 {
+		t.Fatalf("selected unrelated sections: ccmCharts=%v componentCharts=%v", selected.ccmCharts, selected.componentCharts)
+	}
+}
+
 func TestMergeCharts_DuplicateKey(t *testing.T) {
 	ccm := map[string]config.Component{
 		"shared": {ODH: &config.PlatformRepo{Repo: "org/a", Ref: "main", SourcePath: "chart"}},

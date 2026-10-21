@@ -23,10 +23,21 @@ It will be executed by a Github Action workflow.
 - ✅ Can be triggered manually via workflow_dispatch
 - ✅ Only updates components using branch@sha tracking format
 - ✅ Fetches latest commit SHAs for tracked branches
-- ✅ Batch updates (all changes in single PR)
+- ✅ Creates independent pull requests for component updates
 - ✅ Automatic branch cleanup after PR merge
 - ✅ Works directly with manifests-config.yaml format
-- ✅ Updates pinned Build-Config commits together with component commits
+- ✅ Keeps ODH and RHOAI refs for a component together
+
+### Pull Request Units
+
+Each changed component gets its own pull request, so a component-specific check failure does not hold up unrelated component updates. Components with both ODH and RHOAI refs are updated together in that component's pull request.
+
+Two shared units remain grouped:
+
+- **CCM charts** are updated together because their changes regenerate shared Cloud Manager RBAC. A fetch failure for one CCM chart delays the other CCM chart updates until the next successful run.
+- **Build-Config** refs are updated together, and their CSV-derived image override updates are resolved in the same pull request.
+
+The workflow continues processing other units when a unit fails. It reports failures in the workflow summary and marks the overall run as failed after the remaining unit jobs finish. Bot pull requests use `sync/upgrade-manifest-shas/` branches and skip the E2E test update requirement.
 
 ## Configuration Details
 

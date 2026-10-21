@@ -252,6 +252,100 @@ imageOverrides:
 	}
 }
 
+func TestResolve_CSVOnlyUpdatesAndImportsCSVOverrides(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "manifests-config.yaml")
+	content := `buildConfig:
+  odh:
+    repo: opendatahub-io/ODH-Build-Config
+    ref: main@1111111111111111111111111111111111111111
+  rhoai:
+    repo: red-hat-data-services/RHOAI-Build-Config
+    ref: rhoai-3.6@2222222222222222222222222222222222222222
+components:
+  ray:
+    odh:
+      repo: opendatahub-io/ray
+      ref: main@3333333333333333333333333333333333333333
+    rhoai:
+      repo: red-hat-data-services/ray
+      ref: rhoai-3.6@4444444444444444444444444444444444444444
+imageOverrides:
+  RELATED_IMAGE_COMPONENT:
+    component: ray
+    paramsEnvKey: RAY_IMAGE
+    odh:
+      base: quay.io/opendatahub/ray
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    rhoai:
+      base: quay.io/rhoai/ray
+      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  RELATED_IMAGE_CSV:
+    source: csv
+    odh:
+      base: quay.io/opendatahub/old
+      digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    rhoai:
+      base: quay.io/rhoai/old
+      digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+`
+	if err := os.WriteFile(configFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fetch := func(_ context.Context, source config.BuildConfigRepo) (map[string]resolver.CSVImage, error) {
+		switch source.Repo {
+		case "opendatahub-io/ODH-Build-Config":
+			return map[string]resolver.CSVImage{
+				"RELATED_IMAGE_CSV":      {Base: "quay.io/opendatahub/csv", Digest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+				"RELATED_IMAGE_IMPORTED": {Base: "quay.io/opendatahub/imported", Digest: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
+			}, nil
+		case "red-hat-data-services/RHOAI-Build-Config":
+			return map[string]resolver.CSVImage{
+				"RELATED_IMAGE_CSV":      {Base: "registry.redhat.io/rhoai/csv-rhel9", Digest: "sha256:9999999999999999999999999999999999999999999999999999999999999999"},
+				"RELATED_IMAGE_IMPORTED": {Base: "registry.redhat.io/rhoai/imported-rhel9", Digest: "sha256:8888888888888888888888888888888888888888888888888888888888888888"},
+			}, nil
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+
+	if _, err := resolver.Resolve(t.Context(), resolver.Options{
+		ConfigFile:          configFile,
+		CSVImportRegistries: []string{"quay.io/opendatahub/", "quay.io/rhoai/"},
+		CSVOnly:             true,
+		FetchCSVImages:      fetch,
+	}); err != nil {
+		t.Fatalf("Resolve() error: %v", err)
+	}
+
+	cfg, err := config.Load(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	componentImage := cfg.ImageOverrides["RELATED_IMAGE_COMPONENT"]
+	if componentImage.ODH == nil || componentImage.ODH.Digest != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ||
+		componentImage.RHOAI == nil || componentImage.RHOAI.Digest != "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Errorf("CSV-only resolution changed the component override: %#v", componentImage)
+	}
+
+	csvImage := cfg.ImageOverrides["RELATED_IMAGE_CSV"]
+	if csvImage.ODH == nil || csvImage.ODH.Base != "quay.io/opendatahub/csv" ||
+		csvImage.ODH.Digest != "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" {
+		t.Errorf("ODH CSV override was not updated: %#v", csvImage.ODH)
+	}
+	if csvImage.RHOAI == nil || csvImage.RHOAI.Base != "quay.io/rhoai/csv-rhel9" ||
+		csvImage.RHOAI.Digest != "sha256:9999999999999999999999999999999999999999999999999999999999999999" {
+		t.Errorf("RHOAI CSV override was not updated and normalized: %#v", csvImage.RHOAI)
+	}
+
+	imported := cfg.ImageOverrides["RELATED_IMAGE_IMPORTED"]
+	if imported.Source != "csv" || imported.ODH == nil || imported.ODH.Base != "quay.io/opendatahub/imported" ||
+		imported.RHOAI == nil || imported.RHOAI.Base != "quay.io/rhoai/imported-rhel9" {
+		t.Errorf("CSV-only resolution did not import CSV images: %#v", imported)
+	}
+}
+
 func TestResolve_ImportsNormalizedRHOAIImagesOnlyByDefaultAllowlist(t *testing.T) {
 	dir := t.TempDir()
 	configFile := filepath.Join(dir, "manifests-config.yaml")
