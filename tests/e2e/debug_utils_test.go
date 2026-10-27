@@ -3,9 +3,12 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -48,6 +51,7 @@ const (
 var (
 	// Regex patterns for common secrets in logs.
 	authBearerPattern = regexp.MustCompile(`(?i)(Authorization:\s*Bearer\s+)[^\s]+`)
+	nonAlphanumeric   = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)
 	passwordPattern   = regexp.MustCompile(`(?i)(password[=:\s]+)[^\s&"']+`)
 	tokenPattern      = regexp.MustCompile(`(?i)(token[=:\s]+)[^\s&"']+`)
 	secretPattern     = regexp.MustCompile(`(?i)(secret[=:\s]+)[^\s&"']+`)
@@ -172,10 +176,38 @@ func runDiagnosticsAndClassify(testName string) {
 
 	logReport(report)
 
+	writeDiagnosticsArtifact(testName, report)
+
 	fc := failureclassifier.Classify(report)
 	redactEvidence(&fc)
 	failureclassifier.EmitClassification(fc, testName)
 	lastClassification.Store(&fc)
+}
+
+// writeDiagnosticsArtifact persists the failure report to ARTIFACT_DIR so
+// diagnostics survive CI log truncation or the cluster dying mid-run (the
+// z2kfb run lost its end-of-run log capture because the API endpoint was
+// already gone).
+func writeDiagnosticsArtifact(testName string, report *clusterhealth.Report) {
+	dir := os.Getenv("ARTIFACT_DIR")
+	if dir == "" {
+		return
+	}
+
+	data, err := json.Marshal(report)
+	if err != nil {
+		log.Printf("Failed to marshal diagnostics artifact: %v", err)
+		return
+	}
+
+	// Sanitize the test name into a file-safe slug.
+	slug := nonAlphanumeric.ReplaceAllString(testName, "_")
+	path := filepath.Join(dir, fmt.Sprintf("diagnostics-%s.json", slug))
+	if err := os.WriteFile(path, []byte(redactSensitiveInfo(string(data))), 0o600); err != nil {
+		log.Printf("Failed to write diagnostics artifact: %v", err)
+		return
+	}
+	log.Printf("Diagnostics artifact written to %s", path)
 }
 
 // logReport walks the clusterhealth Report sections and produces human-readable
@@ -631,4 +663,31 @@ func getControllerDeploymentName(ctx context.Context) string {
 	}
 
 	return controllerDeploymentODH
+}
+
+func TestWriteDiagnosticsArtifact(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ARTIFACT_DIR", dir)
+
+	report := &clusterhealth.Report{
+		Nodes: clusterhealth.SectionResult[clusterhealth.NodesSection]{
+			Error: "Get \"https://api.example.com\": password=supersecret dial timeout",
+		},
+	}
+
+	writeDiagnosticsArtifact("monitoring/Group_2: Metrics", report)
+
+	data, err := os.ReadFile(filepath.Join(dir, "diagnostics-monitoring_Group_2_Metrics.json"))
+	if err != nil {
+		t.Fatalf("expected diagnostics artifact to be written: %v", err)
+	}
+	if strings.Contains(string(data), "supersecret") {
+		t.Fatal("expected secrets to be redacted in the artifact")
+	}
+	if !strings.Contains(string(data), "[REDACTED]") {
+		t.Fatal("expected redaction marker in the artifact")
+	}
+	if !strings.Contains(string(data), "dial timeout") {
+		t.Fatal("expected report content in the artifact")
+	}
 }
