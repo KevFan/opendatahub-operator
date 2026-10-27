@@ -33,8 +33,17 @@ func (e *InfraOnlyFailureError) Error() string {
 //   - 1000-1999: Infrastructure failures (image-pull, pod-startup, network, quota, node, storage)
 //   - 2000-2999: Test logic failures
 //   - 3000+: Unknown/unclassifiable
+//
+// Category values; these mirror pkg/failureclassifier's category constants
+// (a separate Go module) and must stay in sync with its emitted JSON.
+const (
+	CategoryInfrastructure = "infrastructure"
+	CategoryTest           = "test"
+	CategoryUnknown        = "unknown"
+)
+
 type FailureClassification struct {
-	Category    string   `json:"category"`    // "infrastructure", "test", "unknown"
+	Category    string   `json:"category"`    // one of the Category* constants
 	Subcategory string   `json:"subcategory"` // e.g., "image-pull", "pod-startup", "test-failure"
 	ErrorCode   int      `json:"error_code"`  // numeric error identifier
 	Evidence    []string `json:"evidence"`    // supporting diagnostic messages

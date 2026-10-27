@@ -960,7 +960,7 @@ func TestFailureSignatureStopsOnlyOnIdenticalSets(t *testing.T) {
 
 func TestAllInfrastructureClassified(t *testing.T) {
 	infra := func() *types.FailureClassification {
-		return &types.FailureClassification{Category: "infrastructure"}
+		return &types.FailureClassification{Category: types.CategoryInfrastructure}
 	}
 
 	require.False(t, allInfrastructureClassified(nil))
@@ -968,7 +968,7 @@ func TestAllInfrastructureClassified(t *testing.T) {
 	require.False(t, allInfrastructureClassified([]types.TestCase{{Name: "TestA", Classification: infra()}, {Name: "TestB"}}))
 	require.True(t, allInfrastructureClassified([]types.TestCase{
 		{Name: "TestA", Classification: infra()},
-		{Name: "TestB", Classification: &types.FailureClassification{Category: "infrastructure", ErrorCode: 1014}},
+		{Name: "TestB", Classification: &types.FailureClassification{Category: types.CategoryInfrastructure, ErrorCode: 1014}},
 	}))
 	require.False(t, allInfrastructureClassified([]types.TestCase{
 		{Name: "TestA", Classification: infra()},
@@ -979,7 +979,7 @@ func TestAllInfrastructureClassified(t *testing.T) {
 func TestStillFailingUsesAggregateAndLatestClassification(t *testing.T) {
 	result := &types.TestResult{
 		FailedTest: []types.TestCase{
-			{Name: "TestFlaky", Classification: &types.FailureClassification{Category: "infrastructure", ErrorCode: 1002}},
+			{Name: "TestFlaky", Classification: &types.FailureClassification{Category: types.CategoryInfrastructure, ErrorCode: 1002}},
 			{Name: "TestFlaky"},
 			{Name: "TestParent"},
 			{Name: "TestParent/leaf"},

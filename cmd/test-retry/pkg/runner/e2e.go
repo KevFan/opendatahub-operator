@@ -592,7 +592,7 @@ func allInfrastructureClassified(failed []types.TestCase) bool {
 		return false
 	}
 	for _, tc := range failed {
-		if tc.Classification == nil || tc.Classification.Category != "infrastructure" {
+		if tc.Classification == nil || tc.Classification.Category != types.CategoryInfrastructure {
 			return false
 		}
 	}
