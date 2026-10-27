@@ -43,6 +43,10 @@ func (r *E2ETestRunner) Run() error {
 		FailedTest: make([]types.TestCase, 0),
 	}
 
+	// Total wall-clock budget starts before the initial run so retries
+	// cannot outlive ephemeral CI clusters.
+	startTime := time.Now()
+
 	// Run initial test execution
 	testResult, err := r.runE2ETests("")
 	if err != nil {
@@ -69,7 +73,6 @@ func (r *E2ETestRunner) Run() error {
 
 	hasFirstRunFailedTests := len(testResult.FailedTest) > 0
 	lastTestResult := testResult
-	startTime := time.Now()
 
 	// Failing-test signatures (name + classification code) from the previous
 	// attempt. A retry that fails exactly the same set of tests cannot make
