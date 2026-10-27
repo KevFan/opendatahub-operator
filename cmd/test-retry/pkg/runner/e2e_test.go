@@ -975,3 +975,23 @@ func TestAllInfrastructureClassified(t *testing.T) {
 		{Name: "TestB", Classification: &types.FailureClassification{Category: "test"}},
 	}))
 }
+
+func TestStillFailingUsesAggregateAndLatestClassification(t *testing.T) {
+	result := &types.TestResult{
+		FailedTest: []types.TestCase{
+			{Name: "TestFlaky", Classification: &types.FailureClassification{Category: "infrastructure", ErrorCode: 1002}},
+			{Name: "TestFlaky"},
+			{Name: "TestParent"},
+			{Name: "TestParent/leaf"},
+			{Name: "TestParent/leaf", Classification: &types.FailureClassification{Category: "test", ErrorCode: 2001}},
+		},
+		PassedTest: []types.TestCase{
+			{Name: "TestFlaky"}, // passed on retry — no longer failing
+		},
+	}
+
+	still := stillFailing(result)
+	require.Len(t, still, 1)
+	require.Equal(t, "TestParent/leaf", still[0].Name)
+	require.Equal(t, "test", still[0].Classification.Category, "later attempt must win")
+}

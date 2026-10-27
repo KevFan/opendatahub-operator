@@ -156,10 +156,14 @@ func (r *E2ETestRunner) Run() error {
 			fmt.Printf("  - %s\n", failedTest.Name)
 		}
 
-		if allInfrastructureClassified(leaves) {
-			names := make([]string, 0, len(leaves))
-			for _, leaf := range leaves {
-				names = append(names, leaf.Name)
+		// Decide the infrastructure exit from the aggregate of all attempts
+		// (failed at least once, never passed later), not just the last
+		// attempt: an attempt that died mid-run under-reports failures, and a
+		// known test-classified failure must keep gating the PR.
+		if allInfrastructureClassified(stillFailing(aggregateResult)) {
+			names := make([]string, 0)
+			for _, tc := range stillFailing(aggregateResult) {
+				names = append(names, tc.Name)
 			}
 			fmt.Println("🏗  All remaining failures are infrastructure-classified — requeue on a fresh cluster (exit code 3)")
 			return &types.InfraOnlyFailureError{FailedTests: names}
@@ -545,6 +549,35 @@ func leafFailures(failed []types.TestCase) []types.TestCase {
 		if !isParent {
 			leaves = append(leaves, tc)
 		}
+	}
+	return leaves
+}
+
+// stillFailing returns the deduplicated leaf failures from the aggregate of
+// all attempts that never passed in a later attempt. Later attempts overwrite
+// earlier classifications for the same test, so the most recent classification
+// decides.
+func stillFailing(result *types.TestResult) []types.TestCase {
+	passed := make(map[string]struct{}, len(result.PassedTest))
+	for _, tc := range result.PassedTest {
+		passed[tc.Name] = struct{}{}
+	}
+
+	byName := make(map[string]types.TestCase)
+	order := make([]string, 0)
+	for _, tc := range leafFailures(result.FailedTest) {
+		if _, ok := passed[tc.Name]; ok {
+			continue
+		}
+		if _, ok := byName[tc.Name]; !ok {
+			order = append(order, tc.Name)
+		}
+		byName[tc.Name] = tc
+	}
+
+	leaves := make([]types.TestCase, 0, len(order))
+	for _, name := range order {
+		leaves = append(leaves, byName[name])
 	}
 	return leaves
 }

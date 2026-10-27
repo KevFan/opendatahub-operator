@@ -394,3 +394,30 @@ func TestRunnerInfraOnlyFailure(t *testing.T) {
 	require.ErrorAs(t, err, &infraErr)
 	require.Equal(t, []string{"TestInfraFail"}, infraErr.FailedTests)
 }
+
+func TestRunnerInfraOnlyFailureNotTrustedOnPartialResults(t *testing.T) {
+	// Reset the attempt marker so the fixture behaves as a first run.
+	marker := filepath.Join(os.TempDir(), "test-retry-infraclass-partial-attempt2")
+	require.NoError(t, os.RemoveAll(marker))
+	t.Cleanup(func() { _ = os.RemoveAll(marker) })
+
+	options := types.E2ETestOptions{
+		MaxRetries:        1,
+		TestPath:          "./testdata/infraclass_partial",
+		TestFlags:         "-timeout 500ms",
+		Config:            &config.Config{Verbose: false},
+		NeverSkipPrefixes: []string{},
+		JUnitOutputPath:   filepath.Join(t.TempDir(), "junit.xml"),
+	}
+
+	runner := NewE2ETestRunner(options)
+	err := runner.Run()
+
+	// The first attempt records a real (unclassified) failure; the retry dies
+	// on a timeout before that test re-runs, so the retry's partial results
+	// contain only infra-classified failures. The runner must still gate the
+	// PR on the known real failure instead of signaling the requeue exit code.
+	var infraErr *types.InfraOnlyFailureError
+	require.NotErrorIs(t, err, infraErr)
+	require.EqualError(t, err, "2 tests failed after retries")
+}
