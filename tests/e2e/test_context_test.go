@@ -17,6 +17,7 @@ import (
 	operatorv1 "github.com/openshift/api/operator/v1"
 	operatorsv1 "github.com/operator-framework/api/pkg/operators/v1"
 	ofapi "github.com/operator-framework/api/pkg/operators/v1alpha1"
+	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -40,6 +41,7 @@ import (
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/cluster/gvk"
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/operatorconfig"
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/resources"
+	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/utils/test/fakeclient"
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/utils/test/matchers/jq"
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/utils/test/testf"
 
@@ -2552,4 +2554,21 @@ func getComponentNameFromKind(kind string) (string, string) {
 	}
 
 	return componentFieldName, conditionKind
+}
+
+func TestNewResourceOptionsDerivesGVKFromUnstructuredObject(t *testing.T) {
+	fakeCli, err := fakeclient.New()
+	require.NoError(t, err)
+	tcf, err := testf.NewTestContext(testf.WithClient(fakeCli))
+	require.NoError(t, err)
+	tc := &TestContext{TestContext: tcf, g: tcf.NewWithT(t), logger: t}
+
+	// A typed object without TypeMeta leaves GVK empty when
+	// WithObjectToCreate captures it; NewResourceOptions must fill it from
+	// the scheme-resolved unstructured object so cleanup deletes work.
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "kueue-manager-config", Namespace: "opendatahub"}}
+	ro := tc.NewResourceOptions(WithObjectToCreate(cm))
+
+	require.Equal(t, "ConfigMap", ro.GVK.Kind)
+	require.Equal(t, corev1.SchemeGroupVersion, ro.GVK.GroupVersion())
 }
