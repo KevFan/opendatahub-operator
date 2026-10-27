@@ -197,6 +197,13 @@ func (tc *TestContext) NewResourceOptions(opts ...ResourceOpts) *ResourceOptions
 		ro.Obj = ro.ObjFn(tc)
 	}
 
+	// Opts like WithObjectToCreate capture the GVK from typed objects before
+	// ObjFn runs, leaving it empty when TypeMeta is unset; the converted
+	// unstructured object always carries the scheme-resolved GVK.
+	if ro.GVK.Empty() && ro.Obj != nil {
+		ro.GVK = ro.Obj.GroupVersionKind()
+	}
+
 	// Ensure that Obj is not nil before returning the options.
 	if ro.Obj == nil {
 		panic("Obj must be set in ResourceOptions") // Panics if Obj is nil to enforce validation.
