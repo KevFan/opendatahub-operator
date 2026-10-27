@@ -918,3 +918,60 @@ func (m *mockGitHubClient) AddComment(ctx context.Context, owner, repo string, p
 	m.lastComment = comment
 	return m.addCommentError
 }
+
+func TestLeafFailures(t *testing.T) {
+	failed := []types.TestCase{
+		{Name: "TestOdhOperator"},
+		{Name: "TestOdhOperator/monitoring"},
+		{Name: "TestOdhOperator/monitoring/Group_2"},
+		{Name: "TestOdhOperator/monitoring/Group_2/leaf"},
+		{Name: "TestOdhOperator/components/kueue/other_leaf"},
+	}
+
+	leaves := leafFailures(failed)
+	require.Len(t, leaves, 2)
+	require.Equal(t, "TestOdhOperator/monitoring/Group_2/leaf", leaves[0].Name)
+	require.Equal(t, "TestOdhOperator/components/kueue/other_leaf", leaves[1].Name)
+}
+
+func TestFailureSignatureStopsOnlyOnIdenticalSets(t *testing.T) {
+	failing := []types.TestCase{
+		{Name: "TestA", Classification: &types.FailureClassification{ErrorCode: 1002}},
+		{Name: "TestB"},
+	}
+
+	orig := failureSignature(failing)
+
+	require.True(t, sameFailureSignature(failureSignature(failing), orig))
+	require.False(t, sameFailureSignature(orig, nil), "empty previous signature must not stop retries")
+	require.False(t, sameFailureSignature(orig, map[string]struct{}{}), "empty sets must not match")
+
+	// A test passing on retry changes the signature set.
+	smaller := []types.TestCase{failing[0]}
+	require.False(t, sameFailureSignature(failureSignature(smaller), orig))
+
+	// Same tests but a different classification code also changes the signature.
+	reclassified := []types.TestCase{
+		{Name: "TestA", Classification: &types.FailureClassification{ErrorCode: 1014}},
+		{Name: "TestB"},
+	}
+	require.False(t, sameFailureSignature(failureSignature(reclassified), orig))
+}
+
+func TestAllInfrastructureClassified(t *testing.T) {
+	infra := func() *types.FailureClassification {
+		return &types.FailureClassification{Category: "infrastructure"}
+	}
+
+	require.False(t, allInfrastructureClassified(nil))
+	require.False(t, allInfrastructureClassified([]types.TestCase{{Name: "TestA"}}), "unclassified failure must not be infra")
+	require.False(t, allInfrastructureClassified([]types.TestCase{{Name: "TestA", Classification: infra()}, {Name: "TestB"}}))
+	require.True(t, allInfrastructureClassified([]types.TestCase{
+		{Name: "TestA", Classification: infra()},
+		{Name: "TestB", Classification: &types.FailureClassification{Category: "infrastructure", ErrorCode: 1014}},
+	}))
+	require.False(t, allInfrastructureClassified([]types.TestCase{
+		{Name: "TestA", Classification: infra()},
+		{Name: "TestB", Classification: &types.FailureClassification{Category: "test"}},
+	}))
+}

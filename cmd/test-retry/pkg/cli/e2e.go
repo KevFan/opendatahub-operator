@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"time"
+
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
@@ -17,6 +19,7 @@ func NewE2ECommand(cfg *config.Config) *cobra.Command {
 	var workingDir string
 	var command string
 	var maxRetries int
+	var maxTotalDuration time.Duration
 	var neverSkip []string
 	var skipAtPrefix []string
 	var junitOutput string
@@ -54,6 +57,7 @@ Example: test-retry e2e -- -run TestFoo -v`,
 			opts := types.E2ETestOptions{
 				Config:            cfg,
 				MaxRetries:        maxRetries,
+				MaxTotalDuration:  maxTotalDuration,
 				TestFilter:        testFilter,
 				TestFlags:         finalTestFlags,
 				TestPath:          testPath,
@@ -75,6 +79,7 @@ Example: test-retry e2e -- -run TestFoo -v`,
 	cmd.Flags().StringVar(&workingDir, "working-dir", "", "Working directory for running go test (default: current directory)")
 	cmd.Flags().StringVar(&command, "command", "", "Custom command to run tests (default: go test). Use for precompiled binaries.")
 	cmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum number of retries for failed tests")
+	cmd.Flags().DurationVar(&maxTotalDuration, "max-total-duration", 0, "Stop retrying once this much total time has elapsed since the initial run (0 = unlimited)")
 	cmd.Flags().StringSliceVar(&neverSkip, "never-skip", []string{"TestOdhOperator/DSCInitialization_and_DataScienceCluster_management_E2E_Tests", "TestOdhOperator/DataScienceCluster"}, "Test prefixes that should never be skipped (always run, repeatable)")
 	cmd.Flags().StringSliceVar(&skipAtPrefix, "skip-at-prefix", []string{
 		"TestOdhOperator/monitoring/",   // Extract monitoring tests at group level for efficient retry

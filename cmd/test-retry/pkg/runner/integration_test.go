@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -47,9 +48,6 @@ func TestRunnerIntegration(t *testing.T) {
 			testPath:      "./testdata/failing",
 			expectedError: "2 tests failed after retries",
 			expectedResults: []testCaseOutput{
-				{Name: "TestAlwaysFail1", HasFailure: true},
-				{Name: "TestAlwaysFail2", HasFailure: true},
-				{Name: "TestPass", HasFailure: false},
 				{Name: "TestAlwaysFail1", HasFailure: true},
 				{Name: "TestAlwaysFail2", HasFailure: true},
 				{Name: "TestPass", HasFailure: false},
@@ -117,10 +115,6 @@ func TestRunnerIntegration(t *testing.T) {
 				{Name: "TestSiblings/nested_with_same_prefix", HasFailure: true},
 				{Name: "TestSiblings/nested_with_same_prefix/sibling_1", HasFailure: true},
 				{Name: "TestSiblings/nested_with_same_prefix/sibling_2", HasFailure: false},
-				{Name: "TestSiblings", HasFailure: true},
-				{Name: "TestSiblings/nested_with_same_prefix", HasFailure: true},
-				{Name: "TestSiblings/nested_with_same_prefix/sibling_1", HasFailure: true},
-				{Name: "TestSiblings/nested_with_same_prefix/sibling_2", HasFailure: false},
 			},
 		},
 		{
@@ -131,8 +125,6 @@ func TestRunnerIntegration(t *testing.T) {
 			expectedResults: []testCaseOutput{
 				{Name: "TestDuplicated", HasFailure: true},
 				{Name: "TestDuplicated/two_of_me", HasFailure: false},
-				{Name: "TestDuplicated/two_of_me#01", HasFailure: true},
-				{Name: "TestDuplicated", HasFailure: true},
 				{Name: "TestDuplicated/two_of_me#01", HasFailure: true},
 				{Name: "TestDuplicated", HasFailure: true},
 				{Name: "TestDuplicated/two_of_me#01", HasFailure: true},
@@ -147,8 +139,6 @@ func TestRunnerIntegration(t *testing.T) {
 				{Name: "TestParallel/Test1", HasFailure: false},
 				{Name: "TestParallel/Test2", HasFailure: true},
 				{Name: "TestParallel/Test3", HasFailure: false},
-				{Name: "TestParallel", HasFailure: true},
-				{Name: "TestParallel/Test2", HasFailure: true},
 				{Name: "TestParallel", HasFailure: true},
 				{Name: "TestParallel/Test2", HasFailure: true},
 			},
@@ -223,11 +213,10 @@ func TestRunnerTimeoutRecovery(t *testing.T) {
 		results = append(results, testCaseOutput{Name: tc.Name, HasFailure: tc.Failure != nil})
 	}
 	// run1: TestFastPass(pass) + TestFastFail(fail) + TestSlow(fail via panic event)
-	// retries 1 and 2: TestFastFail(fail) + TestSlow(fail) only (TestFastPass skipped)
+	// retry 1: TestFastFail(fail) + TestSlow(fail) only (TestFastPass skipped);
+	// identical failure signature then stops the retry loop.
 	require.Equal(t, []testCaseOutput{
 		{Name: "TestFastPass", HasFailure: false},
-		{Name: "TestFastFail", HasFailure: true},
-		{Name: "TestSlow", HasFailure: true},
 		{Name: "TestFastFail", HasFailure: true},
 		{Name: "TestSlow", HasFailure: true},
 		{Name: "TestFastFail", HasFailure: true},
@@ -360,4 +349,48 @@ func readJUnitFile(t *testing.T, path string) formatter.TestSuite {
 	require.NoError(t, err)
 
 	return suite
+}
+
+func TestRunnerMaxTotalDurationStopsRetries(t *testing.T) {
+	options := types.E2ETestOptions{
+		MaxRetries:        2,
+		MaxTotalDuration:  time.Nanosecond, // already exceeded before the first retry
+		TestPath:          "./testdata/failing",
+		Config:            &config.Config{Verbose: false},
+		NeverSkipPrefixes: []string{},
+		JUnitOutputPath:   filepath.Join(t.TempDir(), "junit.xml"),
+	}
+
+	runner := NewE2ETestRunner(options)
+	err := runner.Run()
+	require.EqualError(t, err, "2 tests failed after retries")
+
+	// Only the initial run executed — no retries fit in the duration budget.
+	suite := readJUnitFile(t, runner.opts.JUnitOutputPath)
+	results := make([]testCaseOutput, 0)
+	for _, tc := range suite.TestCases {
+		results = append(results, testCaseOutput{Name: tc.Name, HasFailure: tc.Failure != nil})
+	}
+	require.Equal(t, []testCaseOutput{
+		{Name: "TestAlwaysFail1", HasFailure: true},
+		{Name: "TestAlwaysFail2", HasFailure: true},
+		{Name: "TestPass", HasFailure: false},
+	}, results)
+}
+
+func TestRunnerInfraOnlyFailure(t *testing.T) {
+	options := types.E2ETestOptions{
+		MaxRetries:        0,
+		TestPath:          "./testdata/infraclass",
+		Config:            &config.Config{Verbose: false},
+		NeverSkipPrefixes: []string{},
+		JUnitOutputPath:   filepath.Join(t.TempDir(), "junit.xml"),
+	}
+
+	runner := NewE2ETestRunner(options)
+	err := runner.Run()
+
+	var infraErr *types.InfraOnlyFailureError
+	require.ErrorAs(t, err, &infraErr)
+	require.Equal(t, []string{"TestInfraFail"}, infraErr.FailedTests)
 }

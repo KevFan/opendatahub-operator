@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/opendatahub-io/opendatahub-operator/v2/cmd/test-retry/pkg/formatter"
 	github "github.com/opendatahub-io/opendatahub-operator/v2/cmd/test-retry/pkg/github"
@@ -68,9 +69,23 @@ func (r *E2ETestRunner) Run() error {
 
 	hasFirstRunFailedTests := len(testResult.FailedTest) > 0
 	lastTestResult := testResult
+	startTime := time.Now()
+
+	// Failing-test signatures (name + classification code) from the previous
+	// attempt. A retry that fails exactly the same set of tests cannot make
+	// progress, so we stop instead of burning the remaining attempts.
+	var prevSignature map[string]struct{}
+	if err == nil {
+		prevSignature = failureSignature(testResult.FailedTest)
+	}
 
 	// Retry tests, skipping the ones that already passed
 	for attempt := 1; attempt <= r.opts.MaxRetries && hasFirstRunFailedTests; attempt++ {
+		if r.opts.MaxTotalDuration > 0 && time.Since(startTime) >= r.opts.MaxTotalDuration {
+			fmt.Printf("⏱  Max total duration (%s) reached — stopping retries\n", r.opts.MaxTotalDuration)
+			break
+		}
+
 		if r.opts.Config.Verbose {
 			fmt.Printf("Retry attempt %d\n", attempt)
 		}
@@ -106,6 +121,18 @@ func (r *E2ETestRunner) Run() error {
 			break
 		}
 
+		// Compare failure signatures only when the attempt completed cleanly;
+		// partial results (e.g. go test timeout) under-report failures.
+		if err == nil {
+			signature := failureSignature(retrySummary.FailedTest)
+			if sameFailureSignature(signature, prevSignature) {
+				fmt.Println("🔁 Retry failed the same tests with the same signatures — stopping retries (failures look deterministic or the cluster is degraded)")
+				break
+			}
+			prevSignature = signature
+		} else {
+			prevSignature = nil
+		}
 	}
 
 	// Export JUnit XML if path is specified
@@ -119,11 +146,23 @@ func (r *E2ETestRunner) Run() error {
 
 	// Final summary
 	if len(lastTestResult.FailedTest) > 0 {
+		// go test -json reports the full parent chain (TestOdhOperator/monitoring/
+		// Group/leaf) as separate failures for one failing leaf; count leaves only.
+		leaves := leafFailures(lastTestResult.FailedTest)
 		fmt.Printf("❌ Final result: %d tests still failing after %d retries\n",
-			len(lastTestResult.FailedTest), r.opts.MaxRetries)
+			len(leaves), r.opts.MaxRetries)
 		// Show which tests are still failing
-		for _, failedTest := range lastTestResult.FailedTest {
+		for _, failedTest := range leaves {
 			fmt.Printf("  - %s\n", failedTest.Name)
+		}
+
+		if allInfrastructureClassified(leaves) {
+			names := make([]string, 0, len(leaves))
+			for _, leaf := range leaves {
+				names = append(names, leaf.Name)
+			}
+			fmt.Println("🏗  All remaining failures are infrastructure-classified — requeue on a fresh cluster (exit code 3)")
+			return &types.InfraOnlyFailureError{FailedTests: names}
 		}
 
 		return fmt.Errorf("%d tests failed after retries", len(lastTestResult.FailedTest))
@@ -461,6 +500,67 @@ func expandWildcardPrefix(testName, prefix string) string {
 
 	// Return the matched prefix from testName
 	return strings.Join(testParts[:len(prefixParts)], "/")
+}
+
+// failureSignature identifies a failure set: test name plus classification
+// error code, so a retry that fails the same tests for the same reason is
+// detected even if messages differ.
+func failureSignature(failed []types.TestCase) map[string]struct{} {
+	signature := make(map[string]struct{}, len(failed))
+	for _, tc := range failed {
+		code := 0
+		if tc.Classification != nil {
+			code = tc.Classification.ErrorCode
+		}
+		signature[fmt.Sprintf("%s|%d", tc.Name, code)] = struct{}{}
+	}
+	return signature
+}
+
+// sameFailureSignature returns true when both signature sets are non-empty and equal.
+func sameFailureSignature(a, b map[string]struct{}) bool {
+	if len(a) == 0 || len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if _, ok := b[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// leafFailures filters out failed tests that are parent containers of another
+// failed test (go test -json reports the whole chain for one failing leaf).
+func leafFailures(failed []types.TestCase) []types.TestCase {
+	leaves := make([]types.TestCase, 0, len(failed))
+	for _, tc := range failed {
+		isParent := false
+		for _, other := range failed {
+			if other.Name != tc.Name && strings.HasPrefix(other.Name, tc.Name+"/") {
+				isParent = true
+				break
+			}
+		}
+		if !isParent {
+			leaves = append(leaves, tc)
+		}
+	}
+	return leaves
+}
+
+// allInfrastructureClassified returns true when every failed test carries an
+// infrastructure classification. A single unclassified failure returns false.
+func allInfrastructureClassified(failed []types.TestCase) bool {
+	if len(failed) == 0 {
+		return false
+	}
+	for _, tc := range failed {
+		if tc.Classification == nil || tc.Classification.Category != "infrastructure" {
+			return false
+		}
+	}
+	return true
 }
 
 // exportJUnit exports test results to JUnit XML format

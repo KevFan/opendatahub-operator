@@ -1,10 +1,22 @@
 package types
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/opendatahub-io/opendatahub-operator/v2/cmd/test-retry/pkg/config"
 )
+
+// InfraOnlyFailureError indicates that every still-failing test was classified
+// as infrastructure-related. The CLI maps it to exit code 3 so CI can requeue
+// the job on a fresh cluster instead of gating the PR on a degraded one.
+type InfraOnlyFailureError struct {
+	FailedTests []string
+}
+
+func (e *InfraOnlyFailureError) Error() string {
+	return fmt.Sprintf("%d tests failed after retries (all classified as infrastructure)", len(e.FailedTests))
+}
 
 // FailureClassification categorizes test failures based on cluster diagnostics.
 // The E2E test framework emits classification data as JSON to stdout when tests fail.
@@ -51,12 +63,16 @@ type PROptions struct {
 // E2ETestOptions holds options for e2e test execution
 type E2ETestOptions struct {
 	MaxRetries int
-	TestFilter string
-	TestFlags  string
-	TestPath   string
-	WorkingDir string
-	Command    string // Path to precompiled test binary (e.g., "./e2e-tests"). Defaults to "go test" if empty. Arguments passed via TestFlags.
-	Config     *config.Config
+	// MaxTotalDuration stops the retry loop once this much wall-clock time has
+	// elapsed since the initial run started (0 = unlimited). It keeps retries
+	// from outliving ephemeral CI clusters.
+	MaxTotalDuration time.Duration
+	TestFilter       string
+	TestFlags        string
+	TestPath         string
+	WorkingDir       string
+	Command          string // Path to precompiled test binary (e.g., "./e2e-tests"). Defaults to "go test" if empty. Arguments passed via TestFlags.
+	Config           *config.Config
 	// test prefixes that should never be skipped (always run)
 	NeverSkipPrefixes []string
 	// prefixes where tests should be extracted at prefix + 1 level

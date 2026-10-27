@@ -178,6 +178,9 @@ E2E_TEST_FLAGS = -timeout 110m
 USE_TEST_RETRY ?= true
 # Maximum retries after the initial E2E run; USE_TEST_RETRY=false forces zero.
 E2E_TESTING_MAX_RETRIES ?= 3
+# Total wall-clock budget for the initial run plus all retries. Keeps retries
+# from outliving ephemeral CI clusters (observed API endpoint loss at ~3h).
+E2E_TEST_MAX_DURATION ?= 2h
 ifneq ($(filter false 0,$(USE_TEST_RETRY)),)
 E2E_TESTING_MAX_RETRIES := 0
 endif
@@ -860,7 +863,7 @@ e2e-test:
 			echo "SELECTIVE-E2E: could not resolve affected components -- running full suite"; \
 		fi; \
 	fi; \
-	go run -C ./cmd/test-retry main.go e2e --verbose --max-retries=$(E2E_TESTING_MAX_RETRIES) --working-dir=$(CURDIR) $(if $(JUNIT_OUTPUT_PATH),--junit-output=$(JUNIT_OUTPUT_PATH)) -- ${E2E_TEST_FLAGS}
+	go run -C ./cmd/test-retry main.go e2e --verbose --max-retries=$(E2E_TESTING_MAX_RETRIES) --max-total-duration=$(E2E_TEST_MAX_DURATION) --working-dir=$(CURDIR) $(if $(JUNIT_OUTPUT_PATH),--junit-output=$(JUNIT_OUTPUT_PATH)) -- ${E2E_TEST_FLAGS}
 
 .PHONY: e2e-test-single
 e2e-test-single:
